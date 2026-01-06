@@ -21,27 +21,35 @@ jobs = get_job_repo()
 def ingest(req: IngestRequest):
     job = jobs.create(req.convId)
 
-    url = req.fileUrl  # URL ONLY
+    # --------------------------------------------------
+    # Resolve source
+    # Priority:
+    # 1. fileUrl (PDF or website)
+    # 2. prompt (plain text or URL)
+    # --------------------------------------------------
+    source = req.fileUrl or req.prompt
 
-    if not url or not isinstance(url, str):
+    if not source or not isinstance(source, str) or not source.strip():
         raise HTTPException(
             status_code=400,
-            detail="fileUrl (PDF or Website URL) must be provided"
+            detail="Either fileUrl or prompt must be provided as a non-empty string"
         )
+
+    source = source.strip()
 
     if USE_CELERY:
         ingest_document.delay(
             job["jobId"],
             req.userId,
             req.convId,
-            url
+            source   # STRING ONLY
         )
     else:
         ingest_document(
             job["jobId"],
             req.userId,
             req.convId,
-            url
+            source
         )
 
     return {
@@ -94,6 +102,7 @@ def ask(convId: str, req: AskRequest):
         "answerMode": mode,
         "sources": sources
     }
+
 
 
 
