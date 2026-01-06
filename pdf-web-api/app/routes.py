@@ -12,7 +12,7 @@ USE_CELERY = os.getenv("USE_CELERY", "true").lower() == "true"
 router = APIRouter(prefix="/v1")
 
 jobs = get_job_repo()
-store = FirestoreRepo()
+
 
 # --------------------------------------------------
 # Ingest PDF or Website
@@ -58,6 +58,7 @@ def ingest(req: IngestRequest):
 @router.get("/jobs/{jobId}")
 def job_status(jobId: str):
     data = jobs.get(jobId)
+    store = FirestoreRepo()
 
     if data["status"] == "not_found":
         raise HTTPException(status_code=404, detail="Job not found")
@@ -94,3 +95,4 @@ def ask(convId: str, req: AskRequest):
         "answerMode": mode,
         "sources": sources
     }
+
