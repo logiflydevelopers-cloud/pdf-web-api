@@ -22,28 +22,34 @@ def ingest(req: IngestRequest):
     """
     Ingest a PDF or Website into the system.
     """
+
+    # Create job using convId as document identifier
     job = jobs.create(req.convId)
 
-    source = {
-        "fileUrl": req.fileUrl,        # PDF URL or Website URL
-        "storagePath": req.storagePath,
-        "fileName": req.fileName,
-        "prompt": req.prompt           # summarization instruction (optional)
-    }
+    # Resolve URL (PDF or Web)
+    url = req.fileUrl or req.prompt
+
+    if not url or not isinstance(url, str):
+        raise HTTPException(
+            status_code=400,
+            detail="Either fileUrl or prompt (URL) must be provided"
+        )
 
     if USE_CELERY:
+        # Async (Render + Celery)
         ingest_document.delay(
             job["jobId"],
             req.userId,
             req.convId,
-            source
+            url  # STRING ONLY
         )
     else:
+        # Sync (local dev)
         ingest_document(
             job["jobId"],
             req.userId,
             req.convId,
-            source
+            url
         )
 
     return {
@@ -51,6 +57,7 @@ def ingest(req: IngestRequest):
         "convId": req.convId,
         "status": "queued"
     }
+
 
 # --------------------------------------------------
 # Job Status
@@ -95,4 +102,5 @@ def ask(convId: str, req: AskRequest):
         "answerMode": mode,
         "sources": sources
     }
+
 
