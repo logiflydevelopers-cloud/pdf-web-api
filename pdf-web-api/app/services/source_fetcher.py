@@ -1,9 +1,11 @@
 import requests
 
 
-def fetch_source(source: dict) -> bytes:
+def fetch_source(source: str) -> bytes:
     """
     Fetch raw content from a URL.
+    SOURCE MUST BE A STRING.
+
     Works for:
     - PDF URLs
     - Website URLs (HTML)
@@ -11,17 +13,16 @@ def fetch_source(source: dict) -> bytes:
     Returns raw bytes.
     """
 
-    url = source.get("fileUrl") or source.get("prompt")
-
-    if not url:
-        raise ValueError("No URL provided in source")
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("source must be a non-empty string URL")
 
     response = requests.get(
-        url,
+        source,
         timeout=30,
         headers={
-            "User-Agent": "Mozilla/5.0 (PDF-Parser-Bot)"
+            "User-Agent": "Mozilla/5.0 (PDF-Web-Parser-Bot)"
         }
     )
+
     response.raise_for_status()
     return response.content
