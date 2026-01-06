@@ -3,7 +3,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 import os
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, List
 
 load_dotenv()
 
@@ -13,9 +13,8 @@ llm = ChatOpenAI(
     api_key=os.environ["OPENAI_API_KEY"]
 )
 
-
 # -------------------------
-# Helpers (ported from Streamlit logic)
+# Helpers
 # -------------------------
 def compute_target_words(total_words: int) -> int:
     if total_words <= 2_000:
@@ -72,7 +71,7 @@ def summarize(
     chunks = splitter.split_text(text)
 
     # -------------------------
-    # MAP step (PROMPT-AWARE)
+    # MAP step (prompt-aware)
     # -------------------------
     if prompt:
         map_prompt = ChatPromptTemplate.from_messages([
@@ -133,3 +132,42 @@ def summarize(
     ).content.strip()
 
     return final
+
+
+# -------------------------
+# Generate top questions
+# -------------------------
+def generate_questions(text: str) -> List[str]:
+    """
+    Generate top 3 useful questions from the document.
+    Stored in Firestore for UI suggestions.
+    """
+
+    if not text or len(text.strip()) < 200:
+        return []
+
+    prompt = ChatPromptTemplate.from_messages([
+        (
+            "system",
+            "You generate helpful questions a user might ask "
+            "after reading a document."
+        ),
+        (
+            "user",
+            "From the content below, generate EXACTLY 3 concise questions.\n\n"
+            "CONTENT:\n{text}\n\n"
+            "Return them as a numbered list."
+        )
+    ])
+
+    response = llm.invoke(
+        prompt.format_messages(text=text[:12_000])  # memory-safe cap
+    ).content.strip()
+
+    questions = []
+    for line in response.splitlines():
+        line = line.strip()
+        if line and line[0].isdigit():
+            questions.append(line.split(".", 1)[-1].strip())
+
+    return questions[:3]
