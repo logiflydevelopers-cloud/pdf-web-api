@@ -46,6 +46,9 @@ def _ingest_logic(
 
             pdf_bytes = fetch_source(url)
 
+            if not isinstance(pdf_bytes, (bytes, bytearray)):
+                raise TypeError("fetch_source() must return bytes for PDF")
+
             jobs.update(jobId, stage="extract", progress=30)
 
             texts, pages, total_words, ocr_pages = extract_pages(pdf_bytes)
@@ -92,7 +95,14 @@ def _ingest_logic(
             jobs.update(jobId, stage="scrape", progress=25)
 
             html_bytes = fetch_source(url)
-            web_text = extract_web_text(html_bytes)
+
+            if not isinstance(html_bytes, (bytes, bytearray)):
+                raise TypeError("fetch_source() must return bytes for web URLs")
+
+            # 🔑 FIX: decode bytes → string BEFORE web extraction
+            html = html_bytes.decode("utf-8", errors="ignore")
+
+            web_text = extract_web_text(html)
 
             total_words = len(web_text.split())
 
@@ -134,9 +144,6 @@ def _ingest_logic(
         # --------------------------------------------------
         jobs.complete(jobId)
 
-    #print("SOURCE =", repr(source), type(source))
-
-
     except Exception as e:
         jobs.fail(jobId, str(e))
         try:
@@ -167,5 +174,3 @@ def ingest_document(self, *args, **kwargs):
         jobId, userId, convId, source = args
 
     return _ingest_logic(jobId, userId, convId, source)
-
-
