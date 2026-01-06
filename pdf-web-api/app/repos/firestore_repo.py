@@ -4,6 +4,13 @@ import os
 
 class FirestoreRepo:
 
+    def __init__(self):
+        project = os.getenv("FIRESTORE_PROJECT")
+        if not project:
+            raise RuntimeError("FIRESTORE_PROJECT env var not set")
+
+        self.db = firestore.Client(project=project)
+
     def save(self, pdfId: str, data: dict):
         data["updatedAt"] = datetime.utcnow()
         db.collection("pdfs").document(pdfId).set(data)
@@ -17,4 +24,5 @@ class FirestoreRepo:
             "status": "failed",
             "error": error
         })
+
 
