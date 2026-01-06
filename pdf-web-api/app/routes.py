@@ -39,11 +39,12 @@ def ingest(req: IngestRequest):
 
     if USE_CELERY:
         ingest_document.delay(
-            job["jobId"],
-            req.userId,
-            req.convId,
-            source   # STRING ONLY
-        )
+        jobId=job["jobId"],
+        userId=req.userId,
+        convId=req.convId,
+        source=source   # STRING URL
+    )
+
     else:
         ingest_document(
             job["jobId"],
@@ -102,6 +103,7 @@ def ask(convId: str, req: AskRequest):
         "answerMode": mode,
         "sources": sources
     }
+
 
 
 
