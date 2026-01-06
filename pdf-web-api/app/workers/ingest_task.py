@@ -150,10 +150,22 @@ def _ingest_logic(
 # CELERY TASK
 # --------------------------------------------------
 @celery.task(bind=True, name="ingest_document")
-def ingest_document(self, **kwargs):
-    return _ingest_logic(
-        jobId=kwargs["jobId"],
-        userId=kwargs["userId"],
-        convId=kwargs["convId"],
-        source=kwargs["source"],
-    )
+def ingest_document(self, *args, **kwargs):
+    """
+    Supports BOTH:
+    - Old positional Celery jobs
+    - New keyword-based jobs
+    """
+
+    if kwargs:
+        jobId = kwargs["jobId"]
+        userId = kwargs["userId"]
+        convId = kwargs["convId"]
+        source = kwargs["source"]
+    else:
+        # backward compatibility (OLD QUEUED TASKS)
+        jobId, userId, convId, source = args
+
+    return _ingest_logic(jobId, userId, convId, source)
+
+
