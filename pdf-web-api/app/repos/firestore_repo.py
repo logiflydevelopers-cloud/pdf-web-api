@@ -1,10 +1,6 @@
 from google.cloud import firestore
 from datetime import datetime
 import os
-from dotenv import load_dotenv
-load_dotenv()  
-
-db = firestore.Client(project=os.environ["FIRESTORE_PROJECT"])
 
 class FirestoreRepo:
 
@@ -21,3 +17,4 @@ class FirestoreRepo:
             "status": "failed",
             "error": error
         })
+
