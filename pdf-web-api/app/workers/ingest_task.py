@@ -1,5 +1,5 @@
 from app.workers.celery import celery
-from app.services.source_fetcher import fetch_pdf_bytes
+from app.services.source_fetcher import fetch_source
 from app.services.pdf_extractor import extract_pages
 from app.services.web_scrapper import extract_web_text
 from app.services.summarizer import summarize, generate_questions
@@ -44,7 +44,7 @@ def _ingest_logic(
         if is_pdf:
             jobs.update(jobId, stage="download", progress=15)
 
-            pdf_bytes = fetch_pdf_bytes(file_url)
+            pdf_bytes = fetch_source(file_url)
 
             jobs.update(jobId, stage="extract", progress=30)
 
@@ -156,3 +156,4 @@ def ingest_document(
     source: dict
 ):
     return _ingest_logic(jobId, userId, convId, source)
+
