@@ -19,32 +19,24 @@ jobs = get_job_repo()
 # --------------------------------------------------
 @router.post("/ingest", status_code=202)
 def ingest(req: IngestRequest):
-    """
-    Ingest a PDF or Website into the system.
-    """
-
-    # Create job using convId as document identifier
     job = jobs.create(req.convId)
 
-    # Resolve URL (PDF or Web)
-    url = req.fileUrl or req.prompt
+    url = req.fileUrl  # URL ONLY
 
     if not url or not isinstance(url, str):
         raise HTTPException(
             status_code=400,
-            detail="Either fileUrl or prompt (URL) must be provided"
+            detail="fileUrl (PDF or Website URL) must be provided"
         )
 
     if USE_CELERY:
-        # Async (Render + Celery)
         ingest_document.delay(
             job["jobId"],
             req.userId,
             req.convId,
-            url  # STRING ONLY
+            url
         )
     else:
-        # Sync (local dev)
         ingest_document(
             job["jobId"],
             req.userId,
@@ -102,5 +94,6 @@ def ask(convId: str, req: AskRequest):
         "answerMode": mode,
         "sources": sources
     }
+
 
 
