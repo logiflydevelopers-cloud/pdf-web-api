@@ -134,6 +134,9 @@ def _ingest_logic(
         # --------------------------------------------------
         jobs.complete(jobId)
 
+    #print("SOURCE =", repr(source), type(source))
+
+
     except Exception as e:
         jobs.fail(jobId, str(e))
         try:
@@ -147,12 +150,10 @@ def _ingest_logic(
 # CELERY TASK
 # --------------------------------------------------
 @celery.task(bind=True, name="ingest_document")
-def ingest_document(
-    self,
-    jobId: str,
-    userId: str,
-    convId: str,
-    source: str
-):
-    return _ingest_logic(jobId, userId, convId, source)
-
+def ingest_document(self, **kwargs):
+    return _ingest_logic(
+        jobId=kwargs["jobId"],
+        userId=kwargs["userId"],
+        convId=kwargs["convId"],
+        source=kwargs["source"],
+    )
