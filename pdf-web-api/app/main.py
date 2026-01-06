@@ -10,7 +10,7 @@ app = FastAPI(
 # ---------------------------
 # Routes
 # ---------------------------
-app.include_router(router, prefix=API_PREFIX)
+app.include_router(router)
 
 # ---------------------------
 # Health check (Render needs this)
@@ -21,3 +21,4 @@ def health():
         "status": "ok",
         "service": APP_NAME
     }
+
