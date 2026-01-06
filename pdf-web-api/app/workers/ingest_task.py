@@ -18,9 +18,9 @@ def _ingest_logic(
     store = FirestoreRepo()
 
     try:
-        # -------------------------
-        # START
-        # -------------------------
+        # --------------------------------------------------
+        # START JOB
+        # --------------------------------------------------
         jobs.update(
             jobId,
             status="processing",
@@ -44,7 +44,7 @@ def _ingest_logic(
         if is_pdf:
             jobs.update(jobId, stage="download", progress=15)
 
-            pdf_bytes = fetch_source(file_url)
+            pdf_bytes = fetch_source(source)
 
             jobs.update(jobId, stage="extract", progress=30)
 
@@ -57,9 +57,7 @@ def _ingest_logic(
                 convId=convId,
                 texts=texts,
                 sourceType="pdf",
-                metadata={
-                    "pages": list(range(1, pages + 1))
-                }
+                pages=list(range(1, pages + 1))
             )
 
             jobs.update(jobId, stage="summary", progress=80)
@@ -93,7 +91,8 @@ def _ingest_logic(
         else:
             jobs.update(jobId, stage="scrape", progress=25)
 
-            web_text = extract_web_text(file_url)
+            html_bytes = fetch_source(source)
+            web_text = extract_web_text(html_bytes)
 
             total_words = len(web_text.split())
 
@@ -104,9 +103,7 @@ def _ingest_logic(
                 convId=convId,
                 texts=[web_text],
                 sourceType="web",
-                metadata={
-                    "url": file_url
-                }
+                url=file_url
             )
 
             jobs.update(jobId, stage="summary", progress=80)
@@ -133,14 +130,17 @@ def _ingest_logic(
                 "status": "ready"
             })
 
-        # -------------------------
-        # DONE
-        # -------------------------
+        # --------------------------------------------------
+        # COMPLETE JOB
+        # --------------------------------------------------
         jobs.complete(jobId)
 
     except Exception as e:
         jobs.fail(jobId, str(e))
-        store.fail(convId, str(e))
+        try:
+            store.fail(convId, str(e))
+        except Exception:
+            pass
         raise
 
 
@@ -156,4 +156,3 @@ def ingest_document(
     source: dict
 ):
     return _ingest_logic(jobId, userId, convId, source)
-
