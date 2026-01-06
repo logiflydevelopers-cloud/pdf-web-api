@@ -12,7 +12,7 @@ def _ingest_logic(
     jobId: str,
     userId: str,
     convId: str,
-    source: dict
+    source: str,   # STRING URL ONLY
 ):
     jobs = get_job_repo()
     store = FirestoreRepo()
@@ -29,14 +29,14 @@ def _ingest_logic(
             convId=convId
         )
 
-        file_url = source.get("fileUrl")
-        file_name = source.get("fileName", "")
-        prompt = source.get("prompt")
+        # --------------------------------------------------
+        # VALIDATE SOURCE
+        # --------------------------------------------------
+        if not source or not isinstance(source, str):
+            raise ValueError("source must be a non-empty string URL")
 
-        is_pdf = (
-            (file_url and file_url.lower().endswith(".pdf")) or
-            (file_name and file_name.lower().endswith(".pdf"))
-        )
+        url = source.strip()
+        is_pdf = url.lower().endswith(".pdf")
 
         # ==================================================
         # PDF INGESTION
@@ -44,7 +44,7 @@ def _ingest_logic(
         if is_pdf:
             jobs.update(jobId, stage="download", progress=15)
 
-            pdf_bytes = fetch_source(source)
+            pdf_bytes = fetch_source(url)
 
             jobs.update(jobId, stage="extract", progress=30)
 
@@ -65,8 +65,7 @@ def _ingest_logic(
             summary = summarize(
                 text="\n".join(texts),
                 total_words=total_words,
-                sourceType="pdf",
-                prompt=prompt
+                sourceType="pdf"
             )
 
             questions = generate_questions(summary)
@@ -80,7 +79,8 @@ def _ingest_logic(
                 "meta": {
                     "pages": pages,
                     "totalWords": total_words,
-                    "ocrPages": ocr_pages
+                    "ocrPages": ocr_pages,
+                    "url": url
                 },
                 "status": "ready"
             })
@@ -91,7 +91,7 @@ def _ingest_logic(
         else:
             jobs.update(jobId, stage="scrape", progress=25)
 
-            html_bytes = fetch_source(source)
+            html_bytes = fetch_source(url)
             web_text = extract_web_text(html_bytes)
 
             total_words = len(web_text.split())
@@ -103,7 +103,7 @@ def _ingest_logic(
                 convId=convId,
                 texts=[web_text],
                 sourceType="web",
-                url=file_url
+                url=url
             )
 
             jobs.update(jobId, stage="summary", progress=80)
@@ -111,8 +111,7 @@ def _ingest_logic(
             summary = summarize(
                 text=web_text,
                 total_words=total_words,
-                sourceType="web",
-                prompt=prompt
+                sourceType="web"
             )
 
             questions = generate_questions(summary)
@@ -124,7 +123,7 @@ def _ingest_logic(
                 "summary": summary,
                 "questions": questions,
                 "meta": {
-                    "url": file_url,
+                    "url": url,
                     "totalWords": total_words
                 },
                 "status": "ready"
@@ -153,6 +152,7 @@ def ingest_document(
     jobId: str,
     userId: str,
     convId: str,
-    source: dict
+    source: str
 ):
     return _ingest_logic(jobId, userId, convId, source)
+
