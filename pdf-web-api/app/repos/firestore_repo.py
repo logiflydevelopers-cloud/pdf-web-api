@@ -1,28 +1,28 @@
 from google.cloud import firestore
-from datetime import datetime
 import os
 
 class FirestoreRepo:
-
     def __init__(self):
-        project = os.getenv("FIRESTORE_PROJECT")
-        if not project:
-            raise RuntimeError("FIRESTORE_PROJECT env var not set")
+        self._db = None
 
-        self.db = firestore.Client(project=project)
+    @property
+    def db(self):
+        if self._db is None:
+            project = os.getenv("FIRESTORE_PROJECT")
+            if not project:
+                raise RuntimeError("FIRESTORE_PROJECT is not set")
+            self._db = firestore.Client(project=project)
+        return self._db
 
-    def save(self, pdfId: str, data: dict):
-        data["updatedAt"] = datetime.utcnow()
-        db.collection("pdfs").document(pdfId).set(data)
+    def save(self, doc_id: str, data: dict):
+        self.db.collection("conversations").document(doc_id).set(data)
 
-    def get(self, pdfId: str):
-        doc = db.collection("pdfs").document(pdfId).get()
+    def get(self, doc_id: str):
+        doc = self.db.collection("conversations").document(doc_id).get()
         return doc.to_dict() if doc.exists else None
 
-    def fail(self, pdfId: str, error: str):
-        self.save(pdfId, {
+    def fail(self, doc_id: str, error: str):
+        self.save(doc_id, {
             "status": "failed",
             "error": error
         })
-
-
