@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from app.repos.redis_jobs import get_job_repo
 from app.repos.firestore_repo import FirestoreRepo
-from app.workers.ingest_task import ingest_pdf
+from app.workers.ingest_task import ingest_document
 from app.schemas.ingest import IngestRequest
 from app.schemas.qa import AskRequest
 from app.services.qa_engine import answer_question
@@ -25,21 +25,21 @@ def ingest(req: IngestRequest):
     job = jobs.create(req.convId)
 
     source = {
-        "fileUrl": req.fileUrl,
+        "fileUrl": req.fileUrl,        # PDF URL or Website URL
         "storagePath": req.storagePath,
         "fileName": req.fileName,
-        "prompt": req.prompt,  # website URL
+        "prompt": req.prompt           # summarization instruction (optional)
     }
 
     if USE_CELERY:
-        ingest_pdf.delay(
+        ingest_document.delay(
             job["jobId"],
             req.userId,
             req.convId,
             source
         )
     else:
-        ingest_pdf(
+        ingest_document(
             job["jobId"],
             req.userId,
             req.convId,
@@ -63,7 +63,8 @@ def job_status(jobId: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     if data["status"] == "done":
-        data["result"] = store.get(data["convId"])
+        result = store.get(data.get("convId"))
+        data["result"] = result
 
     return data
 
