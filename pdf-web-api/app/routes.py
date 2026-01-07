@@ -77,12 +77,7 @@ def job_status(jobId: str):
 @router.post("/conversations/{convId}/ask")
 def ask(convId: str, req: AskRequest):
     store = FirestoreRepo()
-    print("🔥 ASK convId:", convId)
-    print("🔥 FIRESTORE_PROJECT:", os.getenv("FIRESTORE_PROJECT"))
-    print("🔥 DB enabled:", store.enabled())
-    
     data = store.get(convId)
-    print("🔥 FIRESTORE DATA:", data)
     
     if not data:
         raise HTTPException(404, "Conversation not found")
@@ -113,4 +108,5 @@ def ask(convId: str, req: AskRequest):
         "answerMode": mode,
         "sources": sources
     }
+
 
