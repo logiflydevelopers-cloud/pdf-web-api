@@ -79,10 +79,19 @@ def ask(convId: str, req: AskRequest):
     store = FirestoreRepo()
     data = store.get(convId)
 
-    if not data or "summary" not in data:
+    if not data:
+    raise HTTPException(404, "Conversation not found")
+
+    if data.get("status") != "ready":
         raise HTTPException(
-            status_code=404,
-            detail="Conversation not ready or not found"
+            status_code=409,
+            detail="Conversation is still processing"
+        )
+    
+    if not data.get("summary"):
+        raise HTTPException(
+            status_code=500,
+            detail="Conversation summary missing"
         )
 
     answer, mode, sources = answer_question(
@@ -99,3 +108,4 @@ def ask(convId: str, req: AskRequest):
         "answerMode": mode,
         "sources": sources
     }
+
