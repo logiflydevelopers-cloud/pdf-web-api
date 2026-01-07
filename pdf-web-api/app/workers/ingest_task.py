@@ -104,61 +104,29 @@ def _ingest_logic(
             })
 
         # ==================================================
-        # WEB INGESTION
+        # WEB INGESTION (SMART CRAWLER)
         # ==================================================
         else:
-            jobs.update(jobId, stage="scrape", progress=25)
+            print("🌐 START SMART WEB CRAWL")
+            jobs.update(jobId, stage="crawl", progress=25)
 
-            pages = []
-            combined_text = ""
+            pages = smart_crawl(
+                url,
+                max_pages=100,
+                max_depth=5,
+            )
 
-            # -------- SITEMAP MODE --------
-            if url.endswith("sitemap.xml"):
-                jobs.update(jobId, stage="sitemap", progress=35)
-
-                result = load_sitemap(
-                    url,
-                    max_pages=40
-                )
-
-                combined_text = result["combined_text"]
-                pages = result["pages"]
-
-            # -------- CONTROLLED CRAWL MODE --------
-            elif "?crawl=true" in url:
-                jobs.update(jobId, stage="crawl", progress=35)
-
-                clean_url = url.split("?")[0]
-
-                result = crawl_site(
-                    clean_url,
-                    max_pages=20,
-                    max_depth=2
-                )
-
-                combined_text = result["combined_text"]
-                pages = result["pages"]
-
-            # -------- SINGLE PAGE MODE --------
-            else:
-                html = content.decode("utf-8", errors="ignore")
-                text = extract_web_text(html)
-
-                combined_text = text
-                pages = [{
-                    "url": url,
-                    "text": text,
-                }]
-
-            if not pages or not combined_text.strip():
+            if not pages:
                 raise ValueError("No usable web content extracted")
 
-            total_words = sum(len(p["text"].split()) for p in pages)
+            print(f"🌐 Pages crawled: {len(pages)}")
 
-            jobs.update(jobId, stage="embed", progress=55)
+            print("🧠 START EMBEDDINGS (WEB)")
+            jobs.update(jobId, stage="embed", progress=60)
 
-            # ---- Build embeddings per page (URL preserved) ----
             for idx, page in enumerate(pages):
+                print(f"🔹 Embedding page {idx + 1}/{len(pages)} → {page['url']}")
+
                 build_embeddings(
                     userId=userId,
                     convId=convId,
@@ -168,43 +136,17 @@ def _ingest_logic(
                     chunkId=f"web-{idx}",
                 )
 
-            jobs.update(jobId, stage="summary", progress=80)
-
-            summary = summarize(
-                text=combined_text,
-                total_words=total_words,
-                sourceType="web",
-            )
-
-            questions = generate_questions(summary)
-
-            store.save(convId, {
-                "userId": userId,
-                "convId": convId,
-                "sourceType": "web",
-                "summary": summary,
-                "questions": questions,
-                "meta": {
-                    "rootUrl": url,
-                    "pagesIngested": len(pages),
-                    "totalWords": total_words,
-                    "pageUrls": [p["url"] for p in pages],
-                },
-                "status": "ready",
-            })
-
+            print("✅ EMBEDDINGS DONE (WEB)")
 
         # -------------------------
         # COMPLETE JOB
         # -------------------------
         jobs.complete(jobId)
+        print("🎉 JOB COMPLETED")
 
     except Exception as e:
+        print("❌ INGEST FAILED:", str(e))
         jobs.fail(jobId, str(e))
-        try:
-            store.fail(convId, str(e))
-        except Exception:
-            pass
         raise
 
 
@@ -222,3 +164,4 @@ def ingest_document(self, *args, **kwargs):
         )
 
     return _ingest_logic(*args)
+
