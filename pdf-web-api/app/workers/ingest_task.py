@@ -12,6 +12,7 @@ from app.services.embeddings import build_embeddings
 
 from app.repos.redis_jobs import get_job_repo
 from app.repos.firestore_repo import FirestoreRepo
+from app.crawlers.smart_crawler import smart_crawl
 
 
 # --------------------------------------------------
@@ -164,4 +165,5 @@ def ingest_document(self, *args, **kwargs):
         )
 
     return _ingest_logic(*args)
+
 
