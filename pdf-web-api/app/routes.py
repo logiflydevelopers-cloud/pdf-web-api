@@ -80,14 +80,14 @@ def ask(convId: str, req: AskRequest):
     data = store.get(convId)
 
     if not data:
-    raise HTTPException(404, "Conversation not found")
+        raise HTTPException(404, "Conversation not found")
 
     if data.get("status") != "ready":
         raise HTTPException(
             status_code=409,
             detail="Conversation is still processing"
         )
-    
+
     if not data.get("summary"):
         raise HTTPException(
             status_code=500,
@@ -108,4 +108,3 @@ def ask(convId: str, req: AskRequest):
         "answerMode": mode,
         "sources": sources
     }
-
