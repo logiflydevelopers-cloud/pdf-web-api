@@ -10,21 +10,21 @@ class FirestoreRepo:
         self._db = None
 
         project = os.getenv("FIRESTORE_PROJECT")
-        print("FIRESTORE_PROJECT =", project)
+        #print("FIRESTORE_PROJECT =", project)
 
         if not project:
-            print("Firestore disabled: FIRESTORE_PROJECT not set")
+            #print("Firestore disabled: FIRESTORE_PROJECT not set")
             return
 
         try:
             self._db = firestore.Client(project=project)
-            print("Firestore initialized successfully")
+            #print("Firestore initialized successfully")
         except DefaultCredentialsError as e:
-            print("Firestore credentials error:", str(e))
-            print("Firestore disabled due to missing credentials")
+            #print("Firestore credentials error:", str(e))
+            #print("Firestore disabled due to missing credentials")
             self._db = None
         except Exception as e:
-            print("Firestore init failed:", str(e))
+           # print("Firestore init failed:", str(e))
             self._db = None
 
     def enabled(self) -> bool:
@@ -102,4 +102,5 @@ class FirestoreRepo:
             return None
 
         return doc.to_dict().get("text")
+
 
