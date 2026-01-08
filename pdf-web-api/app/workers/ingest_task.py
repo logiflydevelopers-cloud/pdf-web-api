@@ -2,21 +2,19 @@ from app.workers.celery import celery
 
 from app.services.source_fetcher import fetch_source
 from app.services.pdf_extractor import extract_pages
-from app.services.html_extractor import extract_web_text
 
-from app.crawlers.site_crawler import crawl_site
-from app.crawlers.sitemap_loader import load_sitemap
+from app.crawlers.smart_crawler import smart_crawl
 
 from app.services.summarizer import summarize, generate_questions
 from app.services.embeddings import build_embeddings
 
 from app.repos.redis_jobs import get_job_repo
 from app.repos.firestore_repo import FirestoreRepo
-from app.crawlers.smart_crawler import smart_crawl
 
 
 # --------------------------------------------------
 # Helper: robust PDF detection (Firebase-safe)
+# (KEPT EXACTLY AS YOU REQUESTED)
 # --------------------------------------------------
 def detect_pdf(url: str, content_type: str) -> bool:
     if content_type and "application/pdf" in content_type:
@@ -34,6 +32,7 @@ def _ingest_logic(
     userId: str,
     convId: str,
     source: str,
+    prompt: str | None = None,
 ):
     jobs = get_job_repo()
     store = FirestoreRepo()
@@ -51,23 +50,31 @@ def _ingest_logic(
         )
 
         if not source or not isinstance(source, str):
-            raise ValueError("source must be a non-empty string URL")
+            raise ValueError("source must be a valid URL string")
 
         url = source.strip()
+        prompt = prompt.strip() if prompt else None
 
         # -------------------------
-        # FETCH HEAD SOURCE
+        # FETCH SOURCE (URL ONLY)
         # -------------------------
         content, content_type = fetch_source(url)
+
         is_pdf = detect_pdf(url, content_type)
 
         # ==================================================
-        # PDF INGESTION
+        # PDF INGESTION (UNCHANGED PARSER)
         # ==================================================
         if is_pdf:
             jobs.update(jobId, stage="extract", progress=25)
 
-            texts, pages, total_words, ocr_pages = extract_pages(content)
+            texts, page_count, total_words, ocr_pages = extract_pages(content)
+
+            final_text = "\n\n".join(texts)
+
+            # ✅ APPLY PROMPT AFTER EXTRACTION ONLY
+            if prompt:
+                final_text = f"{prompt}\n\n{final_text}"
 
             jobs.update(jobId, stage="embed", progress=55)
 
@@ -76,13 +83,13 @@ def _ingest_logic(
                 convId=convId,
                 texts=texts,
                 sourceType="pdf",
-                pages=list(range(1, pages + 1)),
+                pages=list(range(1, page_count + 1)),
             )
 
             jobs.update(jobId, stage="summary", progress=80)
 
             summary = summarize(
-                text="\n".join(texts),
+                text=final_text,
                 total_words=total_words,
                 sourceType="pdf",
             )
@@ -97,7 +104,7 @@ def _ingest_logic(
                 "questions": questions,
                 "meta": {
                     "url": url,
-                    "pages": pages,
+                    "pages": page_count,
                     "totalWords": total_words,
                     "ocrPages": ocr_pages,
                 },
@@ -108,7 +115,6 @@ def _ingest_logic(
         # WEB INGESTION (SMART CRAWLER)
         # ==================================================
         else:
-            print("🌐 START SMART WEB CRAWL")
             jobs.update(jobId, stage="crawl", progress=25)
 
             pages = smart_crawl(
@@ -120,50 +126,74 @@ def _ingest_logic(
             if not pages:
                 raise ValueError("No usable web content extracted")
 
-            print(f"🌐 Pages crawled: {len(pages)}")
-
-            print("🧠 START EMBEDDINGS (WEB)")
             jobs.update(jobId, stage="embed", progress=60)
 
+            combined_texts = []
+
             for idx, page in enumerate(pages):
-                print(f"🔹 Embedding page {idx + 1}/{len(pages)} → {page['url']}")
+                text = page["text"]
+
+                # ✅ APPLY PROMPT AFTER EXTRACTION ONLY
+                if prompt:
+                    text = f"{prompt}\n\n{text}"
+
+                combined_texts.append(text)
 
                 build_embeddings(
                     userId=userId,
                     convId=convId,
-                    texts=[page["text"]],
+                    texts=[text],
                     sourceType="web",
                     url=page["url"],
                     chunkId=f"web-{idx}",
                 )
 
-            print("✅ EMBEDDINGS DONE (WEB)")
+            full_text = "\n\n".join(combined_texts)
+
+            summary = summarize(
+                text=full_text,
+                total_words=len(full_text.split()),
+                sourceType="web",
+            )
+
+            questions = generate_questions(summary)
+
+            store.save(convId, {
+                "userId": userId,
+                "convId": convId,
+                "sourceType": "web",
+                "summary": summary,
+                "questions": questions,
+                "meta": {
+                    "url": url,
+                    "pages": len(pages),
+                },
+                "status": "ready",
+            })
 
         # -------------------------
         # COMPLETE JOB
         # -------------------------
         jobs.complete(jobId)
-        print("🎉 JOB COMPLETED")
 
     except Exception as e:
-        print("❌ INGEST FAILED:", str(e))
         jobs.fail(jobId, str(e))
         raise
 
 
 # --------------------------------------------------
-# Celery Task Wrapper
+# Celery Task Wrapper (SAFE + BACKWARD COMPATIBLE)
 # --------------------------------------------------
 @celery.task(bind=True, name="ingest_document")
 def ingest_document(self, *args, **kwargs):
     if kwargs:
         return _ingest_logic(
-            kwargs["jobId"],
-            kwargs["userId"],
-            kwargs["convId"],
-            kwargs["source"],
+            jobId=kwargs["jobId"],
+            userId=kwargs["userId"],
+            convId=kwargs["convId"],
+            source=kwargs["source"],   # ✅ URL ONLY
+            prompt=kwargs.get("prompt")  # ✅ PROMPT SEPARATE
         )
 
+    # positional fallback
     return _ingest_logic(*args)
-
-
