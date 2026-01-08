@@ -1,4 +1,3 @@
-# app/repos/firestore_repo.py
 import os
 from google.cloud import firestore
 from google.auth.exceptions import DefaultCredentialsError
@@ -10,21 +9,15 @@ class FirestoreRepo:
         self._db = None
 
         project = os.getenv("FIRESTORE_PROJECT")
-        #print("FIRESTORE_PROJECT =", project)
 
         if not project:
-            #print("Firestore disabled: FIRESTORE_PROJECT not set")
             return
 
         try:
             self._db = firestore.Client(project=project)
-            #print("Firestore initialized successfully")
-        except DefaultCredentialsError as e:
-            #print("Firestore credentials error:", str(e))
-            #print("Firestore disabled due to missing credentials")
+        except DefaultCredentialsError:
             self._db = None
-        except Exception as e:
-           # print("Firestore init failed:", str(e))
+        except Exception:
             self._db = None
 
     def enabled(self) -> bool:
@@ -34,22 +27,46 @@ class FirestoreRepo:
     # Conversation-level
     # ---------------------------------------------------
     def save(self, doc_id: str, data: dict):
+        """
+        Full save (used for final result).
+        """
         if not self._db:
             return
-        self._db.collection("conversations").document(doc_id).set(data)
+
+        self._db \
+            .collection("conversations") \
+            .document(doc_id) \
+            .set(data)
+
+    def update(self, doc_id: str, data: dict):
+        """
+        Partial update (merge-safe).
+        Used for progress + restart recovery.
+        """
+        if not self._db:
+            return
+
+        self._db \
+            .collection("conversations") \
+            .document(doc_id) \
+            .set(data, merge=True)
 
     def get(self, doc_id: str) -> Optional[Dict]:
         if not self._db:
             return None
 
-        doc = self._db.collection("conversations").document(doc_id).get()
+        doc = self._db \
+            .collection("conversations") \
+            .document(doc_id) \
+            .get()
+
         return doc.to_dict() if doc.exists else None
 
     def fail(self, doc_id: str, error: str):
         if not self._db:
             return
 
-        self.save(doc_id, {
+        self.update(doc_id, {
             "status": "failed",
             "error": error
         })
@@ -64,9 +81,6 @@ class FirestoreRepo:
         text: str,
         metadata: Optional[Dict] = None
     ):
-        """
-        Stores chunk text separately (NOT in Pinecone).
-        """
         if not self._db:
             return
 
@@ -83,9 +97,6 @@ class FirestoreRepo:
             .set(payload)
 
     def get_chunk(self, conversation_id: str, chunk_id: str) -> Optional[str]:
-        """
-        Retrieves chunk text for RAG.
-        """
         if not self._db:
             return None
 
@@ -102,5 +113,3 @@ class FirestoreRepo:
             return None
 
         return doc.to_dict().get("text")
-
-
