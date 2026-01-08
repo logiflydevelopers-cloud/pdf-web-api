@@ -2,7 +2,6 @@ from app.workers.celery import celery
 
 from app.services.source_fetcher import fetch_source
 from app.services.pdf_extractor import extract_pages
-
 from app.crawlers.smart_crawler import smart_crawl
 
 from app.services.summarizer import summarize, generate_questions
@@ -14,14 +13,11 @@ from app.repos.firestore_repo import FirestoreRepo
 
 # --------------------------------------------------
 # Helper: robust PDF detection (Firebase-safe)
-# (KEPT EXACTLY AS REQUESTED)
 # --------------------------------------------------
 def detect_pdf(url: str, content_type: str) -> bool:
     if content_type and "application/pdf" in content_type:
         return True
-
-    clean_url = url.lower().split("?")[0]
-    return clean_url.endswith(".pdf")
+    return url.lower().split("?")[0].endswith(".pdf")
 
 
 # --------------------------------------------------
@@ -41,14 +37,7 @@ def _ingest_logic(
         # -------------------------
         # START JOB
         # -------------------------
-        jobs.update(
-            jobId,
-            status="processing",
-            stage="fetch",
-            progress=5,
-            convId=convId,
-        )
-
+        jobs.update(jobId, status="processing", stage="fetch", progress=5, convId=convId)
         store.update(convId, {
             "convId": convId,
             "userId": userId,
@@ -70,14 +59,11 @@ def _ingest_logic(
         is_pdf = detect_pdf(url, content_type)
 
         # ==================================================
-        # PDF INGESTION
+        # PDF INGESTION (UNCHANGED)
         # ==================================================
         if is_pdf:
             jobs.update(jobId, stage="extract", progress=25)
-            store.update(convId, {
-                "stage": "extract",
-                "progress": 25,
-            })
+            store.update(convId, {"stage": "extract", "progress": 25})
 
             texts, page_count, total_words, ocr_pages = extract_pages(content)
 
@@ -86,10 +72,7 @@ def _ingest_logic(
                 final_text = f"{prompt}\n\n{final_text}"
 
             jobs.update(jobId, stage="embed", progress=55)
-            store.update(convId, {
-                "stage": "embed",
-                "progress": 55,
-            })
+            store.update(convId, {"stage": "embed", "progress": 55})
 
             build_embeddings(
                 userId=userId,
@@ -100,10 +83,7 @@ def _ingest_logic(
             )
 
             jobs.update(jobId, stage="summary", progress=80)
-            store.update(convId, {
-                "stage": "summary",
-                "progress": 80,
-            })
+            store.update(convId, {"stage": "summary", "progress": 80})
 
             summary = summarize(
                 text=final_text,
@@ -129,45 +109,48 @@ def _ingest_logic(
             })
 
         # ==================================================
-        # WEB INGESTION (SAFE + FAST)
+        # WEB INGESTION (MICRO-BATCHED)
         # ==================================================
         else:
             jobs.update(jobId, stage="crawl", progress=25)
-            store.update(convId, {
-                "stage": "crawl",
-                "progress": 25,
-            })
+            store.update(convId, {"stage": "crawl", "progress": 25})
 
             pages = smart_crawl(url)
-
             if not pages:
                 raise ValueError("No usable web content extracted")
 
             jobs.update(jobId, stage="embed", progress=60)
-            store.update(convId, {
-                "stage": "embed",
-                "progress": 60,
-            })
+            store.update(convId, {"stage": "embed", "progress": 60})
 
+            BATCH_SIZE = 5
             combined_texts = []
 
-            for idx, page in enumerate(pages):
-                text = page["text"]
+            for i in range(0, len(pages), BATCH_SIZE):
+                batch = pages[i:i + BATCH_SIZE]
 
-                # ✅ Apply prompt per page (safe)
-                if prompt:
-                    text = f"{prompt}\n\n{text}"
+                texts = []
+                metas = []
 
-                combined_texts.append(text)
+                for j, page in enumerate(batch):
+                    text = page["text"]
+                    if prompt:
+                        text = f"{prompt}\n\n{text}"
 
-                # ✅ ONE PAGE → ONE EMBEDDING
+                    texts.append(text)
+                    combined_texts.append(text)
+
+                    metas.append({
+                        "url": page["url"],
+                        "chunkId": f"web-{i + j}",
+                    })
+
+                # 🔥 ONE EMBEDDING CALL PER 5 PAGES
                 build_embeddings(
                     userId=userId,
                     convId=convId,
-                    texts=[text],
+                    texts=texts,
                     sourceType="web",
-                    url=page["url"],          # ✅ singular
-                    chunkId=f"web-{idx}",     # ✅ unique
+                    metadata=metas,
                 )
 
             full_text = "\n\n".join(combined_texts)
@@ -200,12 +183,7 @@ def _ingest_logic(
 
     except Exception as e:
         jobs.fail(jobId, str(e))
-
-        store.update(convId, {
-            "status": "failed",
-            "error": str(e),
-        })
-
+        store.update(convId, {"status": "failed", "error": str(e)})
         raise
 
 
@@ -222,5 +200,4 @@ def ingest_document(self, *args, **kwargs):
             source=kwargs["source"],
             prompt=kwargs.get("prompt"),
         )
-
     return _ingest_logic(*args)

@@ -1,10 +1,8 @@
-# app/repos/embeddings.py
-
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.repos.pinecone_repo import PineconeRepo
 from app.repos.firestore_repo import FirestoreRepo
-from typing import List, Optional
+from typing import List, Optional, Dict
 import uuid
 
 # -------------------------
@@ -19,103 +17,133 @@ def build_embeddings(
     convId: str,
     texts: List[str],
     sourceType: str,
-    pages: Optional[List[int]] = None,   # PDF only
-    url: Optional[str] = None,            # WEB only
-    chunkId: Optional[str] = None,        # Optional prefix (WEB per-page)
+    pages: Optional[List[int]] = None,         # PDF only
+    url: Optional[str] = None,                  # WEB (single page)
+    chunkId: Optional[str] = None,              # Optional prefix
+    metadata: Optional[List[Dict]] = None,      # 🔥 NEW (WEB micro-batch)
 ):
     """
     Build and upsert embeddings for BOTH:
     - PDF
-    - Website
+    - Website (micro-batched)
 
     Storage model:
     - Pinecone: vectors + lightweight metadata ONLY
     - Firestore: chunk text + full metadata (NO vectors)
     """
 
-    # -------------------------
-    # Text chunking
-    # -------------------------
+    if not texts:
+        return
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1600,
         chunk_overlap=200,
         separators=["\n\n", "\n", " ", ""],
     )
 
-    full_text = "\n".join(texts)
-    chunks = splitter.split_text(full_text)
-
-    if not chunks:
-        return
-
-    embeddings = emb.embed_documents(chunks)
-
     pinecone = PineconeRepo()
     firestore = FirestoreRepo()
 
-    # ⚠️ Namespace choice intentionally preserved
-    # (do NOT change unless QA logic is updated)
     namespace = f"{userId}:{convId}"
-
     vectors = []
 
-    # -------------------------
-    # Build vectors
-    # -------------------------
-    for i, (chunk, vector) in enumerate(zip(chunks, embeddings)):
+    # ==================================================
+    # 🔥 WEB MICRO-BATCH MODE
+    # ==================================================
+    if sourceType == "web" and metadata:
+        for idx, text in enumerate(texts):
+            page_meta = metadata[idx]
 
-        # Deterministic chunkId when provided (WEB per-page)
-        chunk_id = (
-            f"{chunkId}_{i}" if chunkId
-            else f"chunk_{uuid.uuid4().hex}"
-        )
+            chunks = splitter.split_text(text)
+            if not chunks:
+                continue
 
-        # -------------------------
-        # Firestore (TEXT ONLY)
-        # -------------------------
-        if firestore.enabled():
-            firestore.save_chunk(
-                conversation_id=convId,
-                chunk_id=chunk_id,
-                text=chunk,
-                metadata={
-                    "userId": userId,
-                    "convId": convId,
-                    "chunkId": chunk_id,
-                    "sourceType": sourceType,
-                    "page": (
-                        pages[i]
-                        if sourceType == "pdf" and pages and i < len(pages)
-                        else None
-                    ),
-                    "url": url if sourceType == "web" else None,
-                }
+            embeddings = emb.embed_documents(chunks)
+
+            for i, (chunk, vector) in enumerate(zip(chunks, embeddings)):
+                cid = f"{page_meta['chunkId']}_{i}"
+
+                # -------- Firestore (TEXT ONLY)
+                if firestore.enabled():
+                    firestore.save_chunk(
+                        conversation_id=convId,
+                        chunk_id=cid,
+                        text=chunk,
+                        metadata={
+                            "userId": userId,
+                            "convId": convId,
+                            "chunkId": cid,
+                            "sourceType": "web",
+                            "url": page_meta["url"],
+                        }
+                    )
+
+                vectors.append({
+                    "id": cid,
+                    "values": vector,
+                    "metadata": {
+                        "chunkId": cid,
+                        "sourceType": "web",
+                        "url": page_meta["url"],
+                    },
+                })
+
+    # ==================================================
+    # PDF / SINGLE PAGE MODE (UNCHANGED)
+    # ==================================================
+    else:
+        full_text = "\n".join(texts)
+        chunks = splitter.split_text(full_text)
+
+        if not chunks:
+            return
+
+        embeddings = emb.embed_documents(chunks)
+
+        for i, (chunk, vector) in enumerate(zip(chunks, embeddings)):
+            cid = (
+                f"{chunkId}_{i}" if chunkId
+                else f"chunk_{uuid.uuid4().hex}"
             )
 
-        # -------------------------
-        # Pinecone vector (NO TEXT)
-        # -------------------------
-        metadata = {
-            "chunkId": chunk_id,
-            "sourceType": sourceType,
-        }
+            if firestore.enabled():
+                firestore.save_chunk(
+                    conversation_id=convId,
+                    chunk_id=cid,
+                    text=chunk,
+                    metadata={
+                        "userId": userId,
+                        "convId": convId,
+                        "chunkId": cid,
+                        "sourceType": sourceType,
+                        "page": (
+                            pages[i]
+                            if sourceType == "pdf" and pages and i < len(pages)
+                            else None
+                        ),
+                        "url": url if sourceType == "web" else None,
+                    }
+                )
 
-        if sourceType == "pdf" and pages and i < len(pages):
-            metadata["page"] = pages[i]
+            meta = {
+                "chunkId": cid,
+                "sourceType": sourceType,
+            }
 
-        if sourceType == "web" and url:
-            metadata["url"] = url
+            if sourceType == "pdf" and pages and i < len(pages):
+                meta["page"] = pages[i]
 
-        vectors.append({
-            "id": chunk_id,
-            "values": vector,
-            "metadata": metadata,
-        })
+            if sourceType == "web" and url:
+                meta["url"] = url
+
+            vectors.append({
+                "id": cid,
+                "values": vector,
+                "metadata": meta,
+            })
 
     # -------------------------
-    # Upsert to Pinecone
+    # Upsert once per batch
     # -------------------------
-    pinecone.upsert(
-        vectors=vectors,
-        namespace=namespace,
-    )
+    if vectors:
+        pinecone.upsert(vectors=vectors, namespace=namespace)
