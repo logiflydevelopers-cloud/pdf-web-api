@@ -129,7 +129,7 @@ def _ingest_logic(
             })
 
         # ==================================================
-        # WEB INGESTION (OPTIMIZED)
+        # WEB INGESTION (SAFE + FAST)
         # ==================================================
         else:
             jobs.update(jobId, stage="crawl", progress=25)
@@ -138,7 +138,6 @@ def _ingest_logic(
                 "progress": 25,
             })
 
-            # ⚡ Let crawler control limits internally
             pages = smart_crawl(url)
 
             if not pages:
@@ -150,27 +149,28 @@ def _ingest_logic(
                 "progress": 60,
             })
 
-            texts = []
-            urls = []
+            combined_texts = []
 
-            for page in pages:
-                texts.append(page["text"])
-                urls.append(page["url"])
+            for idx, page in enumerate(pages):
+                text = page["text"]
 
-            # ✅ Apply prompt ONCE
-            if prompt:
-                texts = [f"{prompt}\n\n{text}" for text in texts]
+                # ✅ Apply prompt per page (safe)
+                if prompt:
+                    text = f"{prompt}\n\n{text}"
 
-            # 🚀 BATCH EMBEDDINGS (HUGE SPEED GAIN)
-            build_embeddings(
-                userId=userId,
-                convId=convId,
-                texts=texts,
-                sourceType="web",
-                urls=urls,
-            )
+                combined_texts.append(text)
 
-            full_text = "\n\n".join(texts)
+                # ✅ ONE PAGE → ONE EMBEDDING
+                build_embeddings(
+                    userId=userId,
+                    convId=convId,
+                    texts=[text],
+                    sourceType="web",
+                    url=page["url"],          # ✅ singular
+                    chunkId=f"web-{idx}",     # ✅ unique
+                )
+
+            full_text = "\n\n".join(combined_texts)
 
             summary = summarize(
                 text=full_text,
