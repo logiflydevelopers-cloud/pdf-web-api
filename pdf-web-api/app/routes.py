@@ -10,7 +10,6 @@ import os
 USE_CELERY = os.getenv("USE_CELERY", "true").lower() == "true"
 
 router = APIRouter(prefix="/v1")
-
 jobs = get_job_repo()
 
 
@@ -19,31 +18,40 @@ jobs = get_job_repo()
 # --------------------------------------------------
 @router.post("/ingest", status_code=202)
 def ingest(req: IngestRequest):
+    """
+    Unified ingestion endpoint.
+
+    - PDF  -> fileUrl (+ optional prompt)
+    - WEB  -> sourceUrl (+ optional prompt)
+    """
+
+    # Create async job
     job = jobs.create(req.convId)
 
-    source = req.fileUrl or req.prompt
+    # Decide ingestion type (SAFE: schema already validated)
+    ingest_type = req.ingest_type()
 
-    if not source or not isinstance(source, str) or not source.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Either fileUrl or prompt must be provided as a non-empty string"
-        )
+    if ingest_type == "pdf":
+        source = req.fileUrl.strip()
+    else:  # web
+        source = req.sourceUrl.strip()
 
-    source = source.strip()
-
+    # Enqueue background task
     if USE_CELERY:
         ingest_document.delay(
             jobId=job["jobId"],
             userId=req.userId,
             convId=req.convId,
-            source=source
+            source=source,
+            prompt=req.prompt   # ✅ PROMPT PASSED SEPARATELY
         )
     else:
         ingest_document(
             job["jobId"],
             req.userId,
             req.convId,
-            source
+            source,
+            req.prompt
         )
 
     return {
@@ -78,9 +86,9 @@ def job_status(jobId: str):
 def ask(convId: str, req: AskRequest):
     store = FirestoreRepo()
     data = store.get(convId)
-    
+
     if not data:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     if data.get("status") != "ready":
         raise HTTPException(
@@ -108,5 +116,3 @@ def ask(convId: str, req: AskRequest):
         "answerMode": mode,
         "sources": sources
     }
-
-
