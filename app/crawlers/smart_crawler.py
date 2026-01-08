@@ -13,7 +13,7 @@ from app.services.js_renderer import render_js_page
 
 
 # =========================
-# Crawler Defaults (OPTIMIZED)
+# Crawler Defaults
 # =========================
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -27,7 +27,8 @@ MAX_TOTAL_WORDS = 25000
 MIN_TEXT_LEN = 150
 POLITE_DELAY_SEC = 0.1
 
-THREAD_POOL_SIZE = 5   # 🔥 SAFE THREAD LIMIT
+THREAD_POOL_SIZE = 5
+MAX_JS_RENDERS = 5   # HARD LIMIT
 
 USE_COMMON_ROUTES = True
 
@@ -83,7 +84,7 @@ def should_skip_url(url: str) -> bool:
 
 
 # =========================
-# HTML extraction helpers
+# HTML helpers
 # =========================
 def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
@@ -102,10 +103,7 @@ def extract_main_text(html: str, url: str) -> Tuple[str, str]:
     title = clean_text(soup.title.get_text(" ")) if soup.title else ""
 
     main = soup.find("main") or soup.find("article")
-    if main:
-        text = clean_text(main.get_text(" "))
-    else:
-        text = clean_text(soup.get_text(" "))
+    text = clean_text(main.get_text(" ")) if main else clean_text(soup.get_text(" "))
 
     return title, text
 
@@ -131,23 +129,8 @@ def extract_links(current_url: str, html: str, root_url: str) -> List[str]:
     return list(links)
 
 
-def looks_like_js_shell(html: str) -> bool:
-    if not html or len(html) < 2000:
-        return True
-
-    markers = ["id=\"root\"", "id=\"app\"", "__next", "react", "vite"]
-    score = sum(m in html.lower() for m in markers)
-
-    soup = BeautifulSoup(html, "html.parser")
-    body_text = clean_text(
-        soup.body.get_text(" ") if soup.body else soup.get_text(" ")
-    )
-
-    return score >= 2 or len(body_text) < 200
-
-
 # =========================
-# Fetch HTML
+# Fetch HTML (SMART JS)
 # =========================
 def fetch_html_requests(url: str, timeout: int = 10) -> Optional[str]:
     try:
@@ -164,20 +147,37 @@ def fetch_html_requests(url: str, timeout: int = 10) -> Optional[str]:
         return None
 
 
-def fetch_html(url: str) -> Optional[str]:
+def should_js_render(url: str, html: Optional[str], js_used: int) -> bool:
+    if js_used >= MAX_JS_RENDERS:
+        return False
+
+    if any(k in url.lower() for k in ("contact", "about", "home")):
+        return True
+
+    if not html:
+        return True
+
+    soup = BeautifulSoup(html, "html.parser")
+    text_len = len(clean_text(soup.get_text(" ")).split())
+
+    return text_len < 300
+
+
+def fetch_html(url: str, js_counter: Dict[str, int]) -> Optional[str]:
     html = fetch_html_requests(url)
-    if html and not looks_like_js_shell(html):
+
+    if not should_js_render(url, html, js_counter["count"]):
         return html
 
-    # ⚠️ JS rendering stays SINGLE-THREADED (SAFE)
     try:
+        js_counter["count"] += 1
         return render_js_page(url)
     except Exception:
         return html
 
 
 # =========================
-# SMART CRAWLER (THREAD-POOLED)
+# SMART CRAWLER
 # =========================
 def smart_crawl(
     root_url: str,
@@ -192,22 +192,18 @@ def smart_crawl(
     pages: List[Dict[str, str]] = []
     total_words = 0
 
-    seeds = [root_url]
+    js_counter = {"count": 0}
 
+    seeds = [root_url]
     if USE_COMMON_ROUTES:
         for p in COMMON_PATHS:
             seeds.append(normalize_url(origin + p))
 
     queue = deque((u, 0) for u in seeds if u)
-
     executor = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
 
     try:
-        while (
-            queue
-            and len(pages) < max_pages
-            and total_words < MAX_TOTAL_WORDS
-        ):
+        while queue and len(pages) < max_pages and total_words < MAX_TOTAL_WORDS:
             batch = []
             while queue and len(batch) < THREAD_POOL_SIZE:
                 url, depth = queue.popleft()
@@ -217,35 +213,28 @@ def smart_crawl(
                 batch.append((url, depth))
 
             futures = {
-                executor.submit(fetch_html, url): (url, depth)
+                executor.submit(fetch_html, url, js_counter): (url, depth)
                 for url, depth in batch
             }
 
             for future in as_completed(futures):
                 url, depth = futures[future]
                 html = future.result()
-
                 if not html:
                     continue
 
                 title, text = extract_main_text(html, url)
-                word_count = len(text.split())
-
-                if word_count < MIN_TEXT_LEN:
+                words = len(text.split())
+                if words < MIN_TEXT_LEN:
                     continue
 
-                pages.append({
-                    "url": url,
-                    "title": title,
-                    "text": text,
-                })
-
-                total_words += word_count
+                pages.append({"url": url, "title": title, "text": text})
+                total_words += words
 
                 if depth < max_depth and total_words < MAX_TOTAL_WORDS:
                     links = extract_links(url, html, root_url)
                     random.shuffle(links)
-                    for link in links[:10]:
+                    for link in links[:5]:
                         if link not in visited:
                             queue.append((link, depth + 1))
 
