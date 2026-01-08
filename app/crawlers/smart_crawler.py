@@ -4,10 +4,10 @@ import re
 from typing import List, Dict, Tuple, Optional
 from urllib.parse import urlparse, urljoin, urldefrag
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from bs4 import BeautifulSoup
-import xml.etree.ElementTree as ET
 
 from app.services.js_renderer import render_js_page
 
@@ -23,11 +23,12 @@ USER_AGENT = (
 
 MAX_PAGES = 50
 MAX_DEPTH = 3
-MAX_TOTAL_WORDS = 15000     # ⬅️ EARLY STOP (configurable)
+MAX_TOTAL_WORDS = 15000
 MIN_TEXT_LEN = 150
-POLITE_DELAY_SEC = 0.1     # ⬇️ Faster
+POLITE_DELAY_SEC = 0.1
 
-USE_SITEMAP = False        # ⬅️ Disable (slow + noisy)
+THREAD_POOL_SIZE = 5   # 🔥 SAFE THREAD LIMIT
+
 USE_COMMON_ROUTES = True
 
 SKIP_EXTENSIONS = (
@@ -94,7 +95,6 @@ def extract_main_text(html: str, url: str) -> Tuple[str, str]:
     for tag in soup(["script", "style", "noscript", "svg"]):
         tag.decompose()
 
-    # ⬅️ Keep footer ONLY for contact pages
     if not any(k in url.lower() for k in ("contact", "reach-us", "get-in-touch")):
         for tag in soup(["header", "footer", "nav", "aside"]):
             tag.decompose()
@@ -169,6 +169,7 @@ def fetch_html(url: str) -> Optional[str]:
     if html and not looks_like_js_shell(html):
         return html
 
+    # ⚠️ JS rendering stays SINGLE-THREADED (SAFE)
     try:
         return render_js_page(url)
     except Exception:
@@ -176,13 +177,14 @@ def fetch_html(url: str) -> Optional[str]:
 
 
 # =========================
-# SMART CRAWLER (FINAL)
+# SMART CRAWLER (THREAD-POOLED)
 # =========================
 def smart_crawl(
     root_url: str,
     max_pages: int = MAX_PAGES,
     max_depth: int = MAX_DEPTH,
 ) -> List[Dict[str, str]]:
+
     root_url = normalize_url(root_url)
     origin = base_origin(root_url)
 
@@ -190,7 +192,6 @@ def smart_crawl(
     pages: List[Dict[str, str]] = []
     total_words = 0
 
-    # -------- Seed URLs --------
     seeds = [root_url]
 
     if USE_COMMON_ROUTES:
@@ -199,44 +200,58 @@ def smart_crawl(
 
     queue = deque((u, 0) for u in seeds if u)
 
-    # -------- Crawl --------
-    while (
-        queue
-        and len(pages) < max_pages
-        and total_words < MAX_TOTAL_WORDS
-    ):
-        url, depth = queue.popleft()
+    executor = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
 
-        if url in visited or depth > max_depth:
-            continue
+    try:
+        while (
+            queue
+            and len(pages) < max_pages
+            and total_words < MAX_TOTAL_WORDS
+        ):
+            batch = []
+            while queue and len(batch) < THREAD_POOL_SIZE:
+                url, depth = queue.popleft()
+                if url in visited or depth > max_depth:
+                    continue
+                visited.add(url)
+                batch.append((url, depth))
 
-        visited.add(url)
+            futures = {
+                executor.submit(fetch_html, url): (url, depth)
+                for url, depth in batch
+            }
 
-        html = fetch_html(url)
-        if not html:
-            continue
+            for future in as_completed(futures):
+                url, depth = futures[future]
+                html = future.result()
 
-        title, text = extract_main_text(html, url)
-        word_count = len(text.split())
+                if not html:
+                    continue
 
-        if word_count < MIN_TEXT_LEN:
-            continue
+                title, text = extract_main_text(html, url)
+                word_count = len(text.split())
 
-        pages.append({
-            "url": url,
-            "title": title,
-            "text": text,
-        })
+                if word_count < MIN_TEXT_LEN:
+                    continue
 
-        total_words += word_count
+                pages.append({
+                    "url": url,
+                    "title": title,
+                    "text": text,
+                })
 
-        if depth < max_depth and total_words < MAX_TOTAL_WORDS:
-            links = extract_links(url, html, root_url)
-            random.shuffle(links)
-            for link in links[:10]:   # ⬅️ Limit fan-out
-                if link not in visited:
-                    queue.append((link, depth + 1))
+                total_words += word_count
 
-        time.sleep(POLITE_DELAY_SEC)
+                if depth < max_depth and total_words < MAX_TOTAL_WORDS:
+                    links = extract_links(url, html, root_url)
+                    random.shuffle(links)
+                    for link in links[:10]:
+                        if link not in visited:
+                            queue.append((link, depth + 1))
+
+                time.sleep(POLITE_DELAY_SEC)
+
+    finally:
+        executor.shutdown(wait=True)
 
     return pages
