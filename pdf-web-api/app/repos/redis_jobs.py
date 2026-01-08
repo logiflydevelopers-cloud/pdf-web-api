@@ -1,12 +1,16 @@
-# app/repos/redis_jobs.py
 import json
 import uuid
 import os
 from datetime import datetime
 from dotenv import load_dotenv
-load_dotenv()  
+
+load_dotenv()
 
 USE_CELERY = os.getenv("USE_CELERY", "true").lower() == "true"
+
+# TTL for job keys (seconds)
+JOB_TTL = int(os.getenv("JOB_TTL", "3600"))  # 1 hour
+
 
 # -------------------------------------------------
 # In-memory fallback (LOCAL DEV)
@@ -51,6 +55,7 @@ class InMemoryJobRepo:
 class RedisJobRepo:
     def __init__(self):
         import redis  # lazy import (IMPORTANT)
+
         redis_url = os.environ.get("REDIS_URL")
         if not redis_url:
             raise RuntimeError("REDIS_URL is required in production")
@@ -67,16 +72,31 @@ class RedisJobRepo:
             "progress": 0,
             "createdAt": datetime.utcnow().isoformat(),
         }
-        self.client.set(jobId, json.dumps(data))
+
+        # 🔒 SET TTL ON CREATE
+        self.client.set(
+            jobId,
+            json.dumps(data),
+            ex=JOB_TTL
+        )
+
         return data
 
     def update(self, jobId, **kwargs):
         raw = self.client.get(jobId)
         if not raw:
             return
+
         data = json.loads(raw)
         data.update(kwargs)
-        self.client.set(jobId, json.dumps(data))
+        data["updatedAt"] = datetime.utcnow().isoformat()
+
+        # 🔒 RESET TTL ON UPDATE
+        self.client.set(
+            jobId,
+            json.dumps(data),
+            ex=JOB_TTL
+        )
 
     def complete(self, jobId):
         self.update(jobId, status="done", progress=100, stage="done")
