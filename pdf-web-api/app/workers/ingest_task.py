@@ -14,7 +14,7 @@ from app.repos.firestore_repo import FirestoreRepo
 
 # --------------------------------------------------
 # Helper: robust PDF detection (Firebase-safe)
-# (KEPT EXACTLY AS YOU REQUESTED)
+# (KEPT EXACTLY AS REQUESTED)
 # --------------------------------------------------
 def detect_pdf(url: str, content_type: str) -> bool:
     if content_type and "application/pdf" in content_type:
@@ -25,7 +25,7 @@ def detect_pdf(url: str, content_type: str) -> bool:
 
 
 # --------------------------------------------------
-# Core ingestion logic
+# Core ingestion logic (RESTART SAFE)
 # --------------------------------------------------
 def _ingest_logic(
     jobId: str,
@@ -49,6 +49,15 @@ def _ingest_logic(
             convId=convId,
         )
 
+        # 🔒 Persist job immediately (survives restarts)
+        store.update(convId, {
+            "convId": convId,
+            "userId": userId,
+            "status": "processing",
+            "stage": "fetch",
+            "progress": 5,
+        })
+
         if not source or not isinstance(source, str):
             raise ValueError("source must be a valid URL string")
 
@@ -59,24 +68,31 @@ def _ingest_logic(
         # FETCH SOURCE (URL ONLY)
         # -------------------------
         content, content_type = fetch_source(url)
-
         is_pdf = detect_pdf(url, content_type)
 
         # ==================================================
-        # PDF INGESTION (UNCHANGED PARSER)
+        # PDF INGESTION
         # ==================================================
         if is_pdf:
             jobs.update(jobId, stage="extract", progress=25)
+            store.update(convId, {
+                "status": "processing",
+                "stage": "extract",
+                "progress": 25,
+            })
 
             texts, page_count, total_words, ocr_pages = extract_pages(content)
-
             final_text = "\n\n".join(texts)
 
-            # ✅ APPLY PROMPT AFTER EXTRACTION ONLY
             if prompt:
                 final_text = f"{prompt}\n\n{final_text}"
 
             jobs.update(jobId, stage="embed", progress=55)
+            store.update(convId, {
+                "status": "processing",
+                "stage": "embed",
+                "progress": 55,
+            })
 
             build_embeddings(
                 userId=userId,
@@ -87,6 +103,11 @@ def _ingest_logic(
             )
 
             jobs.update(jobId, stage="summary", progress=80)
+            store.update(convId, {
+                "status": "processing",
+                "stage": "summary",
+                "progress": 80,
+            })
 
             summary = summarize(
                 text=final_text,
@@ -96,6 +117,7 @@ def _ingest_logic(
 
             questions = generate_questions(summary)
 
+            # ✅ FINAL STATE
             store.save(convId, {
                 "userId": userId,
                 "convId": convId,
@@ -112,10 +134,15 @@ def _ingest_logic(
             })
 
         # ==================================================
-        # WEB INGESTION (SMART CRAWLER)
+        # WEB INGESTION
         # ==================================================
         else:
             jobs.update(jobId, stage="crawl", progress=25)
+            store.update(convId, {
+                "status": "processing",
+                "stage": "crawl",
+                "progress": 25,
+            })
 
             pages = smart_crawl(
                 url,
@@ -127,13 +154,16 @@ def _ingest_logic(
                 raise ValueError("No usable web content extracted")
 
             jobs.update(jobId, stage="embed", progress=60)
+            store.update(convId, {
+                "status": "processing",
+                "stage": "embed",
+                "progress": 60,
+            })
 
             combined_texts = []
 
             for idx, page in enumerate(pages):
                 text = page["text"]
-
-                # ✅ APPLY PROMPT AFTER EXTRACTION ONLY
                 if prompt:
                     text = f"{prompt}\n\n{text}"
 
@@ -158,6 +188,7 @@ def _ingest_logic(
 
             questions = generate_questions(summary)
 
+            # ✅ FINAL STATE
             store.save(convId, {
                 "userId": userId,
                 "convId": convId,
@@ -178,11 +209,18 @@ def _ingest_logic(
 
     except Exception as e:
         jobs.fail(jobId, str(e))
+
+        # 🔒 Persist failure (restart safe)
+        store.update(convId, {
+            "status": "failed",
+            "error": str(e),
+        })
+
         raise
 
 
 # --------------------------------------------------
-# Celery Task Wrapper (SAFE + BACKWARD COMPATIBLE)
+# Celery Task Wrapper (SAFE)
 # --------------------------------------------------
 @celery.task(bind=True, name="ingest_document")
 def ingest_document(self, *args, **kwargs):
@@ -191,9 +229,8 @@ def ingest_document(self, *args, **kwargs):
             jobId=kwargs["jobId"],
             userId=kwargs["userId"],
             convId=kwargs["convId"],
-            source=kwargs["source"],   # ✅ URL ONLY
-            prompt=kwargs.get("prompt")  # ✅ PROMPT SEPARATE
+            source=kwargs["source"],
+            prompt=kwargs.get("prompt"),
         )
 
-    # positional fallback
     return _ingest_logic(*args)
