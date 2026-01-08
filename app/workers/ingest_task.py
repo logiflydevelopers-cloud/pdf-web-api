@@ -21,7 +21,7 @@ def detect_pdf(url: str, content_type: str) -> bool:
 
 
 # --------------------------------------------------
-# Core ingestion logic (RESTART SAFE)
+# Core ingestion logic (RESTART + WARM-SHUTDOWN SAFE)
 # --------------------------------------------------
 def _ingest_logic(
     jobId: str,
@@ -59,7 +59,7 @@ def _ingest_logic(
         is_pdf = detect_pdf(url, content_type)
 
         # ==================================================
-        # PDF INGESTION (UNCHANGED)
+        # PDF INGESTION
         # ==================================================
         if is_pdf:
             jobs.update(jobId, stage="extract", progress=25)
@@ -109,7 +109,7 @@ def _ingest_logic(
             })
 
         # ==================================================
-        # WEB INGESTION (MICRO-BATCHED)
+        # WEB INGESTION (MICRO-BATCHED + SAFE)
         # ==================================================
         else:
             jobs.update(jobId, stage="crawl", progress=25)
@@ -118,6 +118,10 @@ def _ingest_logic(
             pages = smart_crawl(url)
             if not pages:
                 raise ValueError("No usable web content extracted")
+
+            # 🔒 HARD CAP (safety + cost control)
+            MAX_PAGES_TO_EMBED = 50
+            pages = pages[:MAX_PAGES_TO_EMBED]
 
             jobs.update(jobId, stage="embed", progress=60)
             store.update(convId, {"stage": "embed", "progress": 60})
@@ -144,7 +148,10 @@ def _ingest_logic(
                         "chunkId": f"web-{i + j}",
                     })
 
-                # 🔥 ONE EMBEDDING CALL PER 5 PAGES
+                # 🔐 Safety guard
+                assert len(texts) == len(metas)
+
+                # 🔥 MICRO-BATCH EMBEDDINGS
                 build_embeddings(
                     userId=userId,
                     convId=convId,
@@ -152,6 +159,11 @@ def _ingest_logic(
                     sourceType="web",
                     metadata=metas,
                 )
+
+                # 🔄 Progress update (heartbeat-safe)
+                progress = 60 + int(((i + BATCH_SIZE) / len(pages)) * 30)
+                jobs.update(jobId, progress=progress)
+                store.update(convId, {"progress": progress})
 
             full_text = "\n\n".join(combined_texts)
 
@@ -183,7 +195,10 @@ def _ingest_logic(
 
     except Exception as e:
         jobs.fail(jobId, str(e))
-        store.update(convId, {"status": "failed", "error": str(e)})
+        store.update(convId, {
+            "status": "failed",
+            "error": str(e),
+        })
         raise
 
 
