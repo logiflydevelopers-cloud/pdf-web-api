@@ -1,5 +1,5 @@
 # app/repos/ingest.py
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 
 
@@ -45,15 +45,18 @@ class IngestRequest(BaseModel):
         description="Optional instruction for summarization or focus"
     )
 
+    @model_validator(mode="after")
+    def validate_ingestion_source(self):
+        if self.fileUrl and self.sourceUrl:
+            raise ValueError("Provide ONLY ONE of fileUrl or sourceUrl")
+
+        if not self.fileUrl and not self.sourceUrl:
+            raise ValueError("Either fileUrl (PDF) or sourceUrl (WEB) is required")
+
+        return self
+
     def ingest_type(self) -> str:
-        """
-        Helper to detect ingestion type.
-        """
-        if self.fileUrl:
-            return "pdf"
-        if self.sourceUrl:
-            return "web"
-        raise ValueError("Either fileUrl (PDF) or sourceUrl (WEB) is required")
+        return "pdf" if self.fileUrl else "web"
 
 
 class IngestResponse(BaseModel):
