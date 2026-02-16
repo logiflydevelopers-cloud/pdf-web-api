@@ -1,4 +1,5 @@
 # app/repos/qa_engine.py
+
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from app.repos.pinecone_repo import PineconeRepo
 from app.repos.firestore_repo import FirestoreRepo
@@ -7,6 +8,19 @@ from typing import Tuple, List, Dict
 
 load_dotenv()
 
+
+# ----------------------------------------
+# TOKEN ESTIMATION (1 token ≈ 4 chars)
+# ----------------------------------------
+def estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return int(len(text) / 4)
+
+
+# ----------------------------------------
+# LLM + EMBEDDINGS
+# ----------------------------------------
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.2
@@ -20,6 +34,9 @@ NO_ANSWER = "Not enough information in the summary to answer that."
 NO_DOC_ANSWER = "Not enough information in the document to answer that."
 
 
+# ----------------------------------------
+# MAIN QA FUNCTION
+# ----------------------------------------
 def answer_question(
     *,
     summary: str,
@@ -27,14 +44,8 @@ def answer_question(
     userId: str,
     convId: str
 ) -> Tuple[str, str, List[Dict]]:
-    """
-    Q&A pipeline:
-    1) Try answering ONLY from summary
-    2) If summary lacks answer → Pinecone RAG fallback
-    Works for BOTH:
-    - PDF
-    - Website
-    """
+
+    firestore = FirestoreRepo()
 
     # ----------------------------------
     # STEP 1: SUMMARY-ONLY ANSWER
@@ -53,20 +64,35 @@ QUESTION:
 {question}
 """
 
-    summary_ans = llm.invoke(summary_prompt).content.strip()
+    summary_response = llm.invoke(summary_prompt)
+    summary_ans = summary_response.content.strip()
 
     if summary_ans != NO_ANSWER:
+        input_tokens = estimate_tokens(summary_prompt)
+        output_tokens = estimate_tokens(summary_ans)
+
+        # Update conversation
+        firestore.update(convId, {
+            "lastQuestion": question,
+            "lastAnswer": summary_ans
+        })
+
+        # Atomic token increment
+        firestore.increment_tokens(
+            convId,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens
+        )
+
         return summary_ans, "summary", []
 
     # ----------------------------------
-    # STEP 2: RAG FALLBACK (Pinecone + Firestore)
+    # STEP 2: RAG FALLBACK
     # ----------------------------------
     q_vec = emb.embed_query(question)
-
     namespace = f"{userId}:{convId}"
 
     pinecone = PineconeRepo()
-    firestore = FirestoreRepo()
 
     res = pinecone.query(
         vector=q_vec,
@@ -74,7 +100,26 @@ QUESTION:
         top_k=6
     )
 
+    # ----------------------------------
+    # NO DOCUMENT MATCH
+    # ----------------------------------
     if not res.matches:
+        output_text = NO_DOC_ANSWER
+
+        input_tokens = estimate_tokens(question)
+        output_tokens = estimate_tokens(output_text)
+
+        firestore.update(convId, {
+            "lastQuestion": question,
+            "lastAnswer": output_text
+        })
+
+        firestore.increment_tokens(
+            convId,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens
+        )
+
         return NO_DOC_ANSWER, "rag", []
 
     context_blocks = []
@@ -89,9 +134,6 @@ QUESTION:
         if not chunk_id:
             continue
 
-        # ------------------------------
-        # Fetch text from Firestore
-        # ------------------------------
         text = firestore.get_chunk(
             conversation_id=convId,
             chunk_id=chunk_id
@@ -100,7 +142,6 @@ QUESTION:
         if not text:
             continue
 
-        # -------- PDF --------
         if source_type == "pdf":
             page = md.get("page")
             ref = f"p. {page}" if page else "p. ?"
@@ -114,7 +155,6 @@ QUESTION:
                 "score": round(m.score, 4)
             })
 
-        # -------- WEB --------
         elif source_type == "web":
             url = md.get("url")
             ref = url or "web"
@@ -152,9 +192,27 @@ QUESTION:
 {question}
 """
 
-    rag_answer = llm.invoke(rag_prompt).content.strip()
+    rag_response = llm.invoke(rag_prompt)
+    rag_answer = rag_response.content.strip()
 
     if cited_refs:
         rag_answer += "\n\nSources: " + ", ".join(sorted(cited_refs))
+
+    # ----------------------------------
+    # TOKEN CALCULATION (RAG)
+    # ----------------------------------
+    input_tokens = estimate_tokens(rag_prompt)
+    output_tokens = estimate_tokens(rag_answer)
+
+    firestore.update(convId, {
+        "lastQuestion": question,
+        "lastAnswer": rag_answer
+    })
+
+    firestore.increment_tokens(
+        convId,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens
+    )
 
     return rag_answer, "rag", sources
