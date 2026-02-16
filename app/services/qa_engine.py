@@ -71,13 +71,13 @@ QUESTION:
         input_tokens = estimate_tokens(summary_prompt)
         output_tokens = estimate_tokens(summary_ans)
 
-        # Update conversation
+        print("Incrementing tokens (SUMMARY):", input_tokens, output_tokens)
+
         firestore.update(convId, {
             "lastQuestion": question,
             "lastAnswer": summary_ans
         })
 
-        # Atomic token increment
         firestore.increment_tokens(
             convId,
             input_tokens=input_tokens,
@@ -108,6 +108,8 @@ QUESTION:
 
         input_tokens = estimate_tokens(question)
         output_tokens = estimate_tokens(output_text)
+
+        print("Incrementing tokens (NO_DOC):", input_tokens, output_tokens)
 
         firestore.update(convId, {
             "lastQuestion": question,
@@ -203,6 +205,8 @@ QUESTION:
     # ----------------------------------
     input_tokens = estimate_tokens(rag_prompt)
     output_tokens = estimate_tokens(rag_answer)
+
+    print("Incrementing tokens (RAG):", input_tokens, output_tokens)
 
     firestore.update(convId, {
         "lastQuestion": question,
