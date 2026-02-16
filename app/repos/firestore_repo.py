@@ -1,5 +1,6 @@
 import os
 from google.cloud import firestore
+from google.cloud.firestore import Increment
 from google.auth.exceptions import DefaultCredentialsError
 from typing import Optional, Dict
 
@@ -28,26 +29,23 @@ class FirestoreRepo:
     # ---------------------------------------------------
     def save(self, doc_id: str, data: dict):
         """
-        Full save (used for final result).
+        Full save (overwrite).
         """
         if not self._db:
             return
 
-        self._db \
-            .collection("conversations") \
+        self._db.collection("conversations") \
             .document(doc_id) \
             .set(data)
 
     def update(self, doc_id: str, data: dict):
         """
-        Partial update (merge-safe).
-        Used for progress + restart recovery.
+        Partial merge update.
         """
         if not self._db:
             return
 
-        self._db \
-            .collection("conversations") \
+        self._db.collection("conversations") \
             .document(doc_id) \
             .set(data, merge=True)
 
@@ -55,8 +53,7 @@ class FirestoreRepo:
         if not self._db:
             return None
 
-        doc = self._db \
-            .collection("conversations") \
+        doc = self._db.collection("conversations") \
             .document(doc_id) \
             .get()
 
@@ -70,6 +67,32 @@ class FirestoreRepo:
             "status": "failed",
             "error": error
         })
+
+    # ---------------------------------------------------
+    # TOKEN MANAGEMENT (NEW - ATOMIC SAFE)
+    # ---------------------------------------------------
+    def increment_tokens(
+        self,
+        doc_id: str,
+        input_tokens: int,
+        output_tokens: int
+    ):
+        """
+        Atomically increments token counters.
+        Safe for concurrent requests.
+        """
+        if not self._db:
+            return
+
+        total_tokens = input_tokens + output_tokens
+
+        self._db.collection("conversations") \
+            .document(doc_id) \
+            .set({
+                "inputTokens": Increment(input_tokens),
+                "outputTokens": Increment(output_tokens),
+                "totalTokens": Increment(total_tokens)
+            }, merge=True)
 
     # ---------------------------------------------------
     # Chunk-level storage
@@ -89,8 +112,7 @@ class FirestoreRepo:
             "metadata": metadata or {}
         }
 
-        self._db \
-            .collection("conversations") \
+        self._db.collection("conversations") \
             .document(conversation_id) \
             .collection("chunks") \
             .document(chunk_id) \
