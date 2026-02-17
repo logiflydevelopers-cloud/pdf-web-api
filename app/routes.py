@@ -109,10 +109,18 @@ def ask(convId: str, req: AskRequest):
         convId=convId
     )
 
+    # 🔥 Get updated token values
+    updated = store.get(convId)
+
     return {
         "convId": convId,
         "question": req.question,
         "answer": answer,
         "answerMode": mode,
-        "sources": sources
+        "sources": sources,
+        "tokenUsage": {
+            "inputTokens": updated.get("inputTokens", 0),
+            "outputTokens": updated.get("outputTokens", 0),
+            "totalTokens": updated.get("totalTokens", 0)
+        }
     }
